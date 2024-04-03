@@ -28,9 +28,27 @@ from pathlib import Path
 from sys import platform
 import shutil
 import time
+from typing import Final
 
-def download_and_unarchive(url, download_path, extract_dir = os.path.join(os.path.expanduser('~'), ".mft/")):
+CONSUL_VERSION: Final = "1.7.1"
+CONSUL_URL_WINDOWS: Final = f"https://releases.hashicorp.com/consul/{CONSUL_VERSION}/consul_{CONSUL_VERSION}_windows_amd64.zip"
+CONSUL_URL_LINUX: Final = f"https://releases.hashicorp.com/consul/{CONSUL_VERSION}/consul_{CONSUL_VERSION}_linux_amd64.zip"
+CONSUL_URL_DARWIN: Final = f"https://releases.hashicorp.com/consul/{CONSUL_VERSION}/consul_{CONSUL_VERSION}_darwin_amd64.zip"
 
+MFT_URL: Final = "https://github.com/apache/airavata-mft/releases/download/v0.0.1/Standalone-Service-0.01-bin.zip"
+
+USER_HOME: Final = os.path.expanduser('~')
+MFT_HOME: Final = os.path.join(USER_HOME, ".mft")
+MFT_INSTALL_DIR: Final = os.path.join(MFT_HOME, "Standalone-Service-0.01")
+MFT_ZIP_FILE_NAME: Final = "Standalone-Service-0.01-bin.zip"
+MFT_BIN_PATH: Final = os.path.join(MFT_INSTALL_DIR, "bin")
+MFT_SCRIPT_NAME: Final = "standalone-service-daemon.sh"
+
+CONSUl_ZIP_FILE_NAME: Final = "consul.zip"
+CONSUL_EXECUTABLE_NAME: Final = "consul.exe" if platform == "win32" else "consul"
+CONSUL_PID_FILE_NAME: Final = "consul.pid"
+
+def download_and_unarchive(url, download_path, extract_dir=MFT_HOME):
   response = requests.get(url, stream=True)
   file_size = int(response.headers['Content-Length'])
   with typer.progressbar(length=file_size) as progress:
@@ -40,13 +58,13 @@ def download_and_unarchive(url, download_path, extract_dir = os.path.join(os.pat
         handle.write(data)
 
   print("Un archiving ....")
-  with zipfile.ZipFile(download_path,"r") as zip_ref:
+  with zipfile.ZipFile(download_path, "r") as zip_ref:
     zip_ref.extractall(extract_dir)
 
   os.remove(download_path)
 
 def restart_service(bin_path, daemon_script_name):
-  current_dir =  os.getcwd()
+  current_dir = os.getcwd()
   try:
     os.chdir(bin_path)
     os.chmod(daemon_script_name, 0o744)
@@ -56,14 +74,13 @@ def restart_service(bin_path, daemon_script_name):
     os.chdir(current_dir)
 
 def stop_service(bin_path, daemon_script_name):
-  current_dir =  os.getcwd()
+  current_dir = os.getcwd()
   try:
     os.chdir(bin_path)
     os.chmod(daemon_script_name, 0o744)
     rc = call(["./" + daemon_script_name, "stop"])
   finally:
     os.chdir(current_dir)
-
 
 def validate_java_availability(required_version):
   """
@@ -99,116 +116,110 @@ def validate_java_availability(required_version):
     java_version = int(java_version)
     if java_version < required_version:
       print("Airavata MFT requires Java version " + required_version + " or higher")
-      print("If you have more than one version of java please set java version "+ required_version +" or higher to the path")
+      print("If you have more than one version of java please set java version " +
+            required_version + " or higher to the path")
       raise typer.Exit()
   else:
     print("Java is either not installed or path hasn't been set properly")
     raise typer.Exit()
-
 
 def start_mft():
   print("Setting up MFT Services")
 
   required_java_version = 11
   if platform == "linux" or platform == "linux2":
-    consul_url = "https://releases.hashicorp.com/consul/1.7.1/consul_1.7.1_linux_amd64.zip"
-    validate_java_availability(required_java_version)
+    consul_url = CONSUL_URL_LINUX
   elif platform == "darwin":
-    consul_url = "https://releases.hashicorp.com/consul/1.7.1/consul_1.7.1_darwin_amd64.zip"
-    validate_java_availability(required_java_version)
+    consul_url = CONSUL_URL_DARWIN
   elif platform == "win32":
-    print("Windows support is not available yet")
-    raise typer.Exit()
+    consul_url = CONSUL_URL_WINDOWS
   else:
     print("Un supported platform: " + platform)
     raise typer.Exit()
 
-  mft_dir = os.path.join(os.path.expanduser('~'), ".mft")
-  if not os.path.exists(mft_dir):
-    os.makedirs(mft_dir)
+  validate_java_availability(required_java_version)
+  if not os.path.exists(MFT_HOME):
+    os.makedirs(MFT_HOME)
 
-  path = os.path.join(os.path.expanduser('~'), ".mft/consul")
+  path = os.path.join(MFT_HOME, CONSUL_EXECUTABLE_NAME)
   if not os.path.exists(path):
     print("Downloading Consul...")
-    zip_path = os.path.join(os.path.expanduser('~'), ".mft/consul.zip")
-    download_and_unarchive(consul_url, zip_path, os.path.join(os.path.expanduser('~'), ".mft/"))
+    zip_path = os.path.join(MFT_HOME, CONSUl_ZIP_FILE_NAME)
+    download_and_unarchive(consul_url, zip_path)
 
-  current_dir =  os.getcwd()
+  current_dir = os.getcwd()
   try:
-    os.chdir(os.path.join(os.path.expanduser('~'), ".mft"))
-    os.chmod("consul", 0o744)
+    os.chdir(MFT_HOME)
+    os.chmod(CONSUL_EXECUTABLE_NAME, 0o744)
 
-    if os.path.exists("consul.pid"):
-      pid = Path('consul.pid').read_text()
+    if os.path.exists(CONSUL_PID_FILE_NAME):
+      pid = Path(CONSUL_PID_FILE_NAME).read_text()
       call(["kill", "-9", pid])
 
     consul_process = Popen(['nohup', './consul', "agent", "-dev"],
-                     stdout=open('consul.log', 'w'),
-                     stderr=open('consul.err.log', 'a'),
-                     preexec_fn=os.setpgrp)
+                           stdout=open('consul.log', 'w'),
+                           stderr=open('consul.err.log', 'a'),
+                           preexec_fn=os.setpgrp)
 
     print("Consul process id: " + str(consul_process.pid))
-    with open("consul.pid", "w") as consul_pid:
+    with open(CONSUL_PID_FILE_NAME, "w") as consul_pid:
       consul_pid.write(str(consul_process.pid))
   finally:
     os.chdir(current_dir)
 
-  path = os.path.join(os.path.expanduser('~'), ".mft/Standalone-Service-0.01")
+  path = MFT_INSTALL_DIR
   if not os.path.exists(path):
-    url = "https://github.com/apache/airavata-mft/releases/download/v0.0.1/Standalone-Service-0.01-bin.zip"
     print("Downloading MFT Server...")
-    zip_path = os.path.join(os.path.expanduser('~'), ".mft/Standalone-Service-0.01-bin.zip")
-    download_and_unarchive(url, zip_path)
+    zip_path = os.path.join(MFT_HOME, MFT_ZIP_FILE_NAME)
+    download_and_unarchive(MFT_URL, zip_path)
 
-  restart_service(path + "/bin", "standalone-service-daemon.sh")
+  restart_service(MFT_BIN_PATH, MFT_SCRIPT_NAME)
 
   print("MFT Started")
-
 
 def stop_mft():
   print("Stopping MFT Services")
 
-  path = os.path.join(os.path.expanduser('~'), ".mft/consul")
+  path = os.path.join(MFT_HOME, CONSUL_EXECUTABLE_NAME)
   if os.path.exists(path):
-    current_dir =  os.getcwd()
+    current_dir = os.getcwd()
     try:
-      os.chdir(os.path.join(os.path.expanduser('~'), ".mft"))
-      os.chmod("consul", 0o744)
+      os.chdir(MFT_HOME)
+      os.chmod(CONSUL_EXECUTABLE_NAME, 0o744)
 
-      if os.path.exists("consul.pid"):
-        pid = Path('consul.pid').read_text()
+      if os.path.exists(CONSUL_PID_FILE_NAME):
+        pid = Path(CONSUL_PID_FILE_NAME).read_text()
         call(["kill", "-9", pid])
     finally:
       os.chdir(current_dir)
 
-  path = os.path.join(os.path.expanduser('~'), ".mft/Standalone-Service-0.01")
+  path = MFT_INSTALL_DIR
   if os.path.exists(path):
-    stop_service(path + "/bin", "standalone-service-daemon.sh")
+    stop_service(MFT_BIN_PATH, MFT_SCRIPT_NAME)
 
   print("MFT Stopped....")
 
 def update_mft():
   stop_mft()
 
-  mft_dir = os.path.join(os.path.expanduser('~'), ".mft")
-  if os.path.exists(mft_dir):
-    print("Removing .mft directory")
-    shutil.rmtree(mft_dir)
+  if os.path.exists(MFT_HOME):
+    print("Removing MFT HOME directory: ", MFT_HOME)
+    shutil.rmtree(MFT_HOME)
 
-  database = os.path.join(os.path.expanduser('~'), "mft_db.mv.db")
+  database = os.path.join(USER_HOME, "mft_db.mv.db")
   if os.path.exists(database):
     os.remove(database)
   start_mft()
 
 def print_log():
-  log_file_path = os.path.join(os.path.expanduser('~'), ".mft", "Standalone-Service-0.01", "logs", "airavata.log")
-  log_file = open(log_file_path,"r")
+  log_file_path = os.path.join(MFT_INSTALL_DIR, "logs", "airavata.log")
+  log_file = open(log_file_path, "r")
   lines = follow_file(log_file)
   for line in lines:
     print(line)
 
 def follow_file(file):
-  #file.seek(0, os.SEEK_END)
+  # file.seek(0, os.SEEK_END)
 
   while True:
     line = file.readline()
